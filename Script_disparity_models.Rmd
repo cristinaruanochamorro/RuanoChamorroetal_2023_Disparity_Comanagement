@@ -1,0 +1,846 @@
+---
+title: "Disparities in the impacts of co-management on fishers' livelihoods"
+author: "Ruano-Chamorro et al."
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+INEQ = read.csv("INEQ_22.csv",
+                header = TRUE,
+                dec = ".")
+```
+
+### LOAD PACKAGES
+
+```{r "load packages"}
+
+library(ggplot2) # An Implementation of the Grammar of Graphics
+library(gridExtra) # Miscellaneous Functions for "Grid" Graphics
+library(lattice) # Trellis Graphics for R
+library(lme4) # Linear Mixed-Effects Models using 'Eigen' and S4
+library(arm)
+library(scales) # Scale Functions for Visualization
+library(performance)
+library(DHARMa)
+library(insight)
+library(parameters)
+library(sjPlot)
+library(tidyverse)
+library(graphics)
+library(vcd)
+library(ggstatsplot)
+library(dplyr)
+library(ggpubr)
+library(MuMIn)
+library(car)
+```
+
+### PREPARE DATA FOR ANALYSIS
+
+
+Meaning of variables:
+  - site = community
+  - OrgEffLivelihood = Impact on individual livelihoods. 5 point likert scale
+  - OrgEffComm = Impact on community. 5 point likert scale
+  - yrseducation = years of education
+  - migrant = being a migrant or not
+  - marlivprim = fishing is a primary livelihood
+  - occdiv = occupational diversity
+  - mslall = wealth, material life style
+  - trustleaders = trust on leaders
+  - decispart = level of participation in decision-making processes
+  - CommEvent = participation in community events
+  - popn = population size
+  - distmktreg = distance to markets
+  - regr = presence or abcense of gear restrictions
+  - regg = presence or abcense of acces restriction
+  - rega =  presence or abcense ofarea restriction
+  - clearboundaries = presence or abcense of clear boundaries
+  - confmechinter = conflic resolution mechanisms
+  - GradSanctions = presence or abcense of graduated sanctions
+
+
+
+Eliminate don't knows and NAs from OrgEffLivelihood and OrgEffComm.
+
+```{r }
+str(INEQ$OrgEffLivelihood)
+INEQ$OrgEffLivelihood_cat<-as.factor(INEQ$OrgEffLivelihood)
+str(INEQ$OrgEffComm)
+INEQ$OrgEffComm_cat<-as.factor(INEQ$OrgEffComm)
+
+ggplot(INEQ,aes(OrgEffLivelihood_cat))+geom_bar()#there are more than 150 don't knows
+ggplot(INEQ,aes(OrgEffComm_cat))+geom_bar()#there are almost 200 don't knows
+
+#eliminate don' knows
+INEQ <- INEQ[INEQ$OrgEffLivelihood!=0,]
+INEQ <- INEQ[INEQ$OrgEffComm!=0,]
+
+#eliminate NAs
+
+which(is.na(INEQ$OrgEffLivelihood))
+INEQ<-INEQ[-c(847, 858, 882, 895, 904, 906, 927, 960),]
+
+which(is.na(INEQ$OrgEffComm))
+
+colSums(is.na(INEQ))
+
+dim(INEQ)#968
+
+```
+### Calculate disparity 
+
+In this script disparity = inequality
+
+
+####################################### CALCULATE DISPARITY 1 (OBJECTIVE) #######################################
+
+Disparity 1 (Objective disparity) = (how the individual think he/she benefits from co-management) - (average of how individuals think they benefit from co-management) 
+
+
+
+```{r }
+
+# Inequality1 = OrgEffLivelihood - average at community level of all OrgEffLivelihood
+avgeffliv.table <- setNames(aggregate(as.numeric(INEQ$OrgEffLivelihood)~INEQ$site,FUN=mean),c("site","avgeffliv"))#table with averages of how individual think they benefit per site ("objective measure" of how the community benefits)
+INEQ.outcomes <- merge(INEQ,avgeffliv.table, by = intersect("site", "site"), all=FALSE) #average has been added to the data frame INEQ
+INEQ.outcomes$Inequality1_rec = as.numeric(INEQ.outcomes$OrgEffLivelihood) - as.numeric(INEQ.outcomes$avgeffliv)
+
+
+```
+
+####################################### CALCULATE DISPARITY 2 (SUBJECTIVE/PERCEIVED) #######################################
+
+Disparity 2 (Subjective disparity, or perceived disparity) = (how the individual think he/she benefits from co-management) - (how the individual thinks the community benefits)
+
+```{r }
+
+ # Calculate Inequality2 (OrgEffLivelihood - OrgEffComm)
+INEQ.outcomes$Inequality2_rec = as.numeric(INEQ.outcomes$OrgEffLivelihood) - as.numeric(INEQ.outcomes$OrgEffComm)
+
+# check distribution of new response variables
+par(mfrow = c(1,2),mar=c(2,2,2,2))
+hist(INEQ.outcomes$Inequality1_rec,main="Inequality1 (recalculated)",breaks = c(-5,-4,-3,-2,-1,0,1,2,3,4,5))
+hist(INEQ.outcomes$Inequality2_rec,main="Inequality2 (recalculated)",breaks = c(-5,-4,-3,-2,-1,0,1,2,3,4,5))
+
+INEQ=INEQ.outcomes
+
+```
+
+###################### TYPE OF DISPARITY #######################
+
+
+```{r }
+
+
+### Split Disparity1 data into losses (-5 to 0)  and gains (0 to 5)
+# 1. Create binary variable: 0 for equal, 1 for any disparity
+INEQ$Ineq1_bin <- as.integer(ifelse(INEQ$Inequality1_rec < 0.5 & INEQ$Inequality1_rec > -0.5,0,1))#tranform to 0 values between 0.5 and -0.5 (equality), tranform to 1 the rest 
+
+
+#2. Create categorical variable with type of disparity: "equal", "loss", "gain"
+INEQ$Ineq1_bintype <- as.factor(ifelse(INEQ$Inequality1_rec < -0.5,"loss", 
+                                       ifelse(INEQ$Inequality1_rec>0.5,"gain","equal")))
+
+### Split Disparity2 data into losses (-5 to 0)  and gains (0 to 5)
+# 1. Create binary variable: 0 for equal, 1 for any disparity
+INEQ$Ineq2_bin <- as.integer(ifelse(INEQ$Inequality2_rec == 0,0,1))
+# 2. Create categorical variable with type of disparity: "equal", "loss", "gain"
+INEQ$Ineq2_bintype <- as.factor(ifelse(INEQ$Inequality2_rec < 0,"loss", 
+                                       ifelse(INEQ$Inequality2_rec>0,"gain","equal")))
+
+
+
+```
+
+
+
+
+Eliminate rest of dont'knows and NAs
+
+```{r }
+
+which(is.na(INEQ$trustleaders))
+INEQ<-INEQ[-c(597),]#eliminate NAs
+
+INEQ <- INEQ[INEQ$trustleaders!=0,] #Eliminate don't knows
+
+
+which(is.na(INEQ$ yrseducation))
+
+INEQ<-INEQ[-c(906),] #eliminate NAs
+
+
+which(is.na(INEQ$migrant))
+
+INEQ<-INEQ[-c(913),] #eliminate NAs
+
+which(is.na(INEQ$ decispart ))
+INEQ<-INEQ[-c(237,485),] #eliminate NAs
+colSums(is.na(INEQ))
+
+colSums(is.na(INEQ))
+
+dim(INEQ)#955
+
+
+#oultiers community events
+
+boxplot(INEQ$CommEvent, plot=FALSE)$out  #Identify the outliers
+
+hist(INEQ$CommEvent)
+
+which(is.na(INEQ$ CommEvent )) #Identify NAs in community events
+
+INEQ<-INEQ[-c(99, 207, 210, 213, 214, 215, 217, 218, 220, 231, 250, 257, 379, 403, 404, 
+               406, 408, 409, 410, 413, 454, 501, 549, 607, 610, 623, 669, 670, 672, 677, 795, 852, 949, 954),]  #eliminate NAs
+
+
+colSums(is.na(INEQ))
+
+INEQ<-subset(INEQ,CommEvent<18)#Eliminate this outlier. It is an error
+
+dim(INEQ)#920
+
+
+which(is.na(INEQ$ CommEvent ))
+
+
+```
+
+Define factors and standardize predictors
+
+
+```{r }
+# Factors should be treated as such in the analysis
+
+INEQ$decispart_cat <- as.factor(INEQ$decispart)
+INEQ$sex_cat<-as.factor(INEQ$sex)
+INEQ$site_cat<-as.factor(INEQ$site)
+INEQ$migrant_cat<-as.factor(INEQ$migrant)
+INEQ$marlivprim_cat<-as.factor(INEQ$marlivprim)
+INEQ$regr_cat<-as.factor(INEQ$regr)
+INEQ$regg_cat<-as.factor(INEQ$regg)
+INEQ$rega_cat<-as.factor(INEQ$rega)
+INEQ$GradSanctions_cat<-as.factor(INEQ$GradSanctions)
+INEQ$clearboundaries_cat<-as.factor(INEQ$clearboundaries)
+```
+
+Standardize predictors
+```{r }
+#continuous
+
+#standardize (2sd) 
+INEQ$distmktreg_sd<-scale(INEQ$distmktreg)*0.5
+INEQ$popn_sd<-scale(INEQ$popn)*0.5
+INEQ$yrseducation_sd<-scale(INEQ$yrseducation)*0.5
+INEQ$mslall_sd<-scale(INEQ$mslall)*0.5
+INEQ$occdiv_sd<-scale(INEQ$occdiv)*0.5
+INEQ$CommEvent_sd<-scale(INEQ$CommEvent)*0.5
+INEQ$trustleaders_sd<-scale(INEQ$trustleaders)*0.5
+INEQ$confmechinter_sd<-scale(INEQ$confmechinter)*0.5
+
+```
+
+SPLIT DATA SET IN 4
+
+Split initial INEQ dataset into 4 datasets that will be used in the models: losses and gains for Inequality 1 (actual) and Inequality 2 (perceived)
+The 4 data sets are: 
+1) INEQ_loss1 (for objective losses)
+2) INEQ_gain1 (for objective gains)
+3) INEQ_loss2 (for subjective losses)
+4) INEQ_gain2 (for subjective gains)
+
+
+
+```{r }
+
+
+# LOSSES 1 (actual/objective): table containing only data for losses and equality for Inequality1
+
+INEQ_loss1 <- INEQ[INEQ$Ineq1_bintype %in% c("loss","equal"),]
+INEQ_loss1$site <- factor(INEQ_loss1$site)
+INEQ_loss1$country <- factor(INEQ_loss1$country)
+
+# GAINS 1 (actual): table containing only data for gains and equality for Inequality1
+INEQ_gain1 <- INEQ[INEQ$Ineq1_bintype %in% c("gain","equal"),]
+INEQ_gain1$site <- factor(INEQ_gain1$site)
+INEQ_gain1$country <- factor(INEQ_gain1$country)
+
+
+# LOSSES 2 (perceived): table containing only data for losses and equality for Inequality2
+INEQ_loss2 <- INEQ[INEQ$Ineq2_bintype %in% c("loss","equal"),]
+INEQ_loss2$site <- factor(INEQ_loss2$site)
+INEQ_loss2$country <- factor(INEQ_loss2$country)
+# GAINS 2 (perceived): table containing only data for gains and equality for Inequality2
+INEQ_gain2 <- INEQ[INEQ$Ineq2_bintype %in% c("gain","equal"),]
+INEQ_gain2$site <- factor(INEQ_gain2$site)
+INEQ_gain2$country <- factor(INEQ_gain2$country)
+```
+
+
+### MODELS
+
+
+
+### MODEL OBJECTIVE LOSSES (Disparity 1)
+
+
+
+Define the global model
+
+```{r}
+M.loss1_global.model<-glmer(Ineq1_bin ~ migrant_cat+ sex_cat + yrseducation_sd + trustleaders_sd + decispart_cat + marlivprim_cat + mslall_sd + occdiv_sd + CommEvent_sd+ popn_sd + distmktreg_sd  +  regr_cat + regg_cat + rega_cat + clearboundaries_cat  + confmechinter_sd + GradSanctions_cat +(1 | site_cat), 
+                                  data = INEQ_loss1,family=binomial(link = "logit"), na.action='na.fail',
+                                  control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=1000000))) 
+```
+
+
+```{r}
+summary(M.loss1_global.model)
+```
+
+
+```{r}
+vif(M.loss1_global.model)
+```
+
+We can conclude there is not multicollinearity
+
+```{r}
+check_overdispersion(M.loss1_global.model)
+```
+```{r }
+check_singularity(M.loss1_global.model)#singularity is fine
+```
+```{r }
+check_convergence(M.loss1_global.model)#convergence is fine
+```
+
+```{r }
+resid.loss1=simulateResiduals(M.loss1_global.model, plot=TRUE)
+```
+
+
+
+
+
+```{r}
+#loss1.dredge<-dredge(global.model = M.loss1_global.model, trace = TRUE)#This line of code was run on the HPC of James Cook University. It will take a long time to run. Consider running this code in your own computer.
+```
+
+```{r}
+loss1.2_dredge_sd<-readRDS(file="loss1.2.dredge.sd.rds")
+```
+
+Model average
+```{r}
+loss1.average_sd<-summary(model.avg(loss1.2_dredge_sd, subset = delta <= 2))
+```
+
+
+```{r}
+loss1.average_sd
+```
+Relative influence
+```{r}
+sw(loss1.average_sd)#Sum of model weights over all models including each explanatory variable.
+```
+
+Confident intervals of the full model
+```{r}
+confint(loss1.average_sd,full=T,level=0.9) #full model averages
+```
+
+
+
+```{r}
+ma.loss1<-summary(loss1.average_sd)#pulling out model averages
+```
+
+```{r}
+df.loss1<-as.data.frame(ma.loss1$coefmat.full)#selecting full model coefficient averages
+```
+
+```{r}
+CI<-as.data.frame(confint(loss1.average_sd,level=0.9,full=T))# to get confident intervals for full model
+```
+
+```{r}
+CI
+```
+
+
+```{r}
+df.loss1$CI.min <-CI$`5 %` #pulling out CIs and putting into same df as coefficient estimates
+```
+
+```{r}
+df.loss1$CI.max <-CI$`95 %`
+```
+
+
+```{r}
+library('data.table')
+```
+```{r}
+df.loss1
+```
+
+
+```{r}
+setDT(df.loss1, keep.rownames='coefficient')#put row names into columns
+```
+
+
+```{r}
+names(df.loss1) <- gsub(" ",'',names(df.loss1))#remove spaces from column headers
+```
+
+
+
+```{r}
+ggplot(data=df.loss1, aes(x=coefficient, y=Estimate))+
+  geom_hline(yintercept=0, color='grey', linetype='dashed', lwd=1)+
+  geom_errorbar(aes(ymin=Estimate-Std.Error, ymax=Estimate+Std.Error), colour="pink",#SE
+         width=.1, lwd=1)+
+    coord_flip()+
+    geom_point(size=3)+theme_classic(base_size=20)+xlab("")+
+  geom_errorbar(aes(ymin=CI.min, ymax=CI.max), colour="blue", # CIs
+                width=.2,lwd=1) 
+  
+```
+
+
+
+###   MODEL OBJECTIVE GAINS (Disparity 1)
+
+Define global model
+
+
+```{r}
+M.gains1_global.model<-glmer(Ineq1_bin ~ migrant_cat+ sex_cat + yrseducation_sd + trustleaders_sd + decispart_cat + marlivprim_cat + mslall_sd + occdiv_sd + CommEvent_sd+ popn_sd + distmktreg_sd  +  regr_cat + regg_cat + rega_cat + clearboundaries_cat  + confmechinter_sd + GradSanctions_cat +(1 | site_cat), 
+                                  data = INEQ_gain1,family=binomial(link = "logit"), na.action='na.fail',
+                                  control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=1000000))) 
+```
+
+```{r}
+summary(M.gains1_global.model)
+```
+```{r}
+check_overdispersion(M.gains1_global.model)
+```
+```{r }
+check_singularity(M.gains1_global.model)
+```
+```{r }
+check_convergence(M.gains1_global.model)
+```
+
+```{r }
+resid.loss1=simulateResiduals(M.gains1_global.model, plot=TRUE,quantreg = T)
+```
+the qq-plot is nearly linear, suggesting that the overall distribution is roughly OK, also the res ~ fitted looks approximately OK. We will plot the residuals against the predictors to check if there is a pattern.
+
+```{r }
+
+#PLOT RESIDUALS FOR EACH PREDICTOR
+
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x=confmechinter_sd))+geom_point()
+```
+```{r }
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x=trustleaders_sd))+geom_point()
+```
+```{r }
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x=migrant_cat))+geom_point()
+```
+```{r }
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x=sex_cat))+geom_point()
+```
+
+```{r }
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x=yrseducation_sd))+geom_point()
+```
+```{r }
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x=decispart_cat ))+geom_point()
+```
+    ```{r }
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x=marlivprim_cat))+geom_point()
+```
+
+
+```{r }
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x= mslall_sd ))+geom_point()
+```
+```{r }
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x=    occdiv_sd ))+geom_point()
+```
+```{r }
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x=   CommEvent_sd))+geom_point()
+```
+```{r}
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x= popn_sd ))+geom_point()
+```
+```{r}
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x= regr_cat))+geom_point()
+```
+```{r}
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x= regg_cat))+geom_point()
+```
+```{r}
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x= rega_cat))+geom_point()
+```
+```{r}
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x=   clearboundaries_cat))+geom_point()
+```
+```{r}
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x= confmechinter_sd))+geom_point()
+```
+```{r}
+ggplot(data=INEQ_gain1, aes(y=resid(M.gains1_global.model),x= GradSanctions_cat ))+geom_point()
+```
+  
+
+
+
+```{r}
+vif(M.gains1_global.model)
+```
+
+
+```{r}
+#gains1.dredge<-dredge(global.model = M.gains1_global.model, trace = TRUE)#This line of code was run on the HPC of James Cook University. It will take a long time to run. Consider running this code in your own computer.
+```
+
+
+```{r}
+gains1.2_dredge_sd<-readRDS(file="gains1.2.dredge.sd.rds")
+```
+
+
+
+```{r}
+gains1.average_sd<-summary(model.avg(gains1.2_dredge_sd, subset = delta <= 2))
+```
+
+
+
+```{r}
+gains1.average_sd
+```
+
+```{r}
+sw(gains1.average_sd)
+```
+
+```{r}
+confint(gains1.average_sd,full=T,level=0.9) #full model averages
+```
+
+
+```{r}
+ma.gains1<-summary(gains1.average_sd)#pulling out model averages
+```
+
+```{r}
+df.gains1<-as.data.frame(ma.gains1$coefmat.full)#selecting full model coefficient averages
+```
+
+```{r}
+CI<-as.data.frame(confint(gains1.average_sd,level=0.9,full=T))# to get confident intervals for full model
+```
+
+```{r}
+CI
+```
+
+```{r}
+df.gains1$CI.min <-CI$`5 %` #pulling out CIs and putting into same df as coefficient estimates
+```
+
+```{r}
+df.gains1$CI.max <-CI$`95 %`
+```
+
+
+```{r}
+df.gains1
+```
+
+```{r}
+setDT(df.gains1, keep.rownames='coefficient')#put row names into columns
+```
+
+
+```{r}
+names(df.gains1) <- gsub(" ",'',names(df.gains1))#remove spaces from column headers
+```
+
+
+
+
+
+```{r}
+ggplot(data=df.gains1, aes(x=coefficient, y=Estimate))+
+  geom_hline(yintercept=0, color='grey', linetype='dashed', lwd=1)+
+  geom_errorbar(aes(ymin=Estimate-Std.Error, ymax=Estimate+Std.Error), colour="pink",#SE
+         width=.1, lwd=1)+
+    coord_flip()+
+    geom_point(size=3)+theme_classic(base_size=20)+xlab("")+
+  geom_errorbar(aes(ymin=CI.min, ymax=CI.max), colour="blue", # CIs
+                width=.2,lwd=1) 
+  
+```
+
+###  MODEL SUBJECTIVE LOSSES (Disparity 2)
+
+```{r}
+M.loss2_global.model<-glmer(Ineq2_bin ~ migrant_cat+ sex_cat + yrseducation_sd + trustleaders_sd + decispart_cat + marlivprim_cat + mslall_sd + occdiv_sd + CommEvent_sd+ popn_sd + distmktreg_sd  +  regr_cat + regg_cat + rega_cat + clearboundaries_cat  + confmechinter_sd + GradSanctions_cat +(1 | site_cat), 
+                                  data = INEQ_loss2,family=binomial(link = "logit"), na.action='na.fail',
+                                  control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=1000000))) 
+```
+
+```{r}
+summary(M.loss2_global.model)
+```
+
+```{r}
+check_overdispersion(M.loss2_global.model)
+```
+```{r }
+check_singularity(M.loss2_global.model)
+```
+```{r }
+check_convergence(M.loss2_global.model)
+```
+
+```{r }
+resid.loss1=simulateResiduals(M.loss2_global.model, plot=TRUE)
+```
+
+```{r}
+vif(M.loss2_global.model)
+```
+
+
+
+
+```{r}
+#loss2.dredge<-dredge(global.model = M.loss2_global.model, trace = TRUE)#This line of code was run on the HPC of James Cook University. It will take a long time to run. Consider running this code in your own computer.
+```
+
+```{r}
+loss2.2_dredge_sd<-readRDS(file="loss2.2.dredge.sd.rds")
+```
+
+
+average model
+
+
+```{r}
+loss2.average_sd<-summary(model.avg(loss2.2_dredge_sd, subset = delta <= 2))
+```
+
+
+```{r}
+loss2.average_sd
+```
+
+
+```{r}
+sw(loss2.average_sd)
+```
+
+
+```{r}
+confint(loss2.average_sd,full=T,level=0.9) #full model averages
+```
+
+
+```{r}
+ma.loss2<-summary(loss2.average_sd)#pulling out model averages
+```
+
+```{r}
+df.loss2<-as.data.frame(ma.loss2$coefmat.full)#selecting full model coefficient averages
+```
+
+```{r}
+CI<-as.data.frame(confint(loss2.average_sd,level=0.9,full=T))# to get confident intervals for full model
+```
+
+```{r}
+CI
+```
+
+
+```{r}
+df.loss2$CI.min <-CI$`5 %` #pulling out CIs and putting into same df as coefficient estimates
+```
+
+```{r}
+df.loss2$CI.max <-CI$`95 %`
+```
+
+
+
+```{r}
+df.loss2
+```
+
+
+```{r}
+setDT(df.loss2, keep.rownames='coefficient')#put row names into columns
+```
+
+
+```{r}
+names(df.loss2) <- gsub(" ",'',names(df.loss2))#remove spaces from column headers
+```
+
+
+
+```{r}
+ggplot(data=df.loss2, aes(x=coefficient, y=Estimate))+
+  geom_hline(yintercept=0, color='grey', linetype='dashed', lwd=1)+
+  geom_errorbar(aes(ymin=Estimate-Std.Error, ymax=Estimate+Std.Error), colour="pink",#SE
+         width=.1, lwd=1)+
+    coord_flip()+
+    geom_point(size=3)+theme_classic(base_size=20)+xlab("")+
+  geom_errorbar(aes(ymin=CI.min, ymax=CI.max), colour="blue", # CIs
+                width=.2,lwd=1) 
+  
+```
+
+
+
+
+
+###  MODEL SUBJECTIVE GAINS (Disparity 2)
+
+ Define global model
+
+
+```{r}
+M.gains2_global.model<-glmer(Ineq2_bin ~ migrant_cat+ sex_cat + yrseducation_sd + trustleaders_sd + decispart_cat + marlivprim_cat + mslall_sd + occdiv_sd + CommEvent_sd+ popn_sd + distmktreg_sd  +  regr_cat + regg_cat + rega_cat + clearboundaries_cat  + confmechinter_sd + GradSanctions_cat +(1 | site_cat), 
+                                  data = INEQ_gain2,family=binomial(link = "logit"), na.action='na.fail',
+                                  control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=1000000))) 
+```
+
+
+```{r}
+summary(M.gains2_global.model)
+```
+```{r}
+check_overdispersion(M.gains2_global.model)
+```
+```{r }
+check_singularity(M.gains2_global.model)
+```
+```{r }
+check_convergence(M.gains2_global.model)
+```
+
+```{r }
+resid.loss1=simulateResiduals(M.gains2_global.model, plot=TRUE)
+```
+```{r}
+vif(M.gains2_global.model)
+```
+
+
+
+```{r}
+#gains2.dredge<-dredge(global.model = M.gains2_global.model, trace = TRUE) #This line of code was run on the HPC of James Cook University. It will take a long time to run. Consider running this code in your own computer.
+```
+
+```{r}
+gains2.2_dredge_sd<-readRDS(file="gains2.2.dredge.sd.rds")
+```
+
+
+
+```{r}
+gains2.average_sd<-summary(model.avg(gains2.2_dredge_sd, subset = delta <= 2))
+```
+
+
+```{r}
+gains2.average_sd
+```
+
+```{r}
+sw(gains2.average_sd)
+```
+
+
+```{r}
+confint(gains2.average_sd,full=T,level=0.9) #full model averages
+```
+
+
+```{r}
+ma.gains2<-summary(gains2.average_sd)#pulling out model averages
+```
+
+```{r}
+df.gains2<-as.data.frame(ma.gains2$coefmat.full)#selecting full model coefficient averages
+```
+
+```{r}
+CI<-as.data.frame(confint(gains2.average_sd,level=0.9,full=T))# to get confident intervals for full model
+```
+
+```{r}
+CI
+```
+
+
+```{r}
+df.gains2$CI.min <-CI$`5 %` #pulling out CIs and putting into same df as coefficient estimates
+```
+
+```{r}
+df.gains2$CI.max <-CI$`95 %`
+```
+
+
+
+```{r}
+df.gains2
+```
+
+
+```{r}
+setDT(df.gains2, keep.rownames='coefficient')#put row names into columns
+```
+
+
+```{r}
+names(df.gains2) <- gsub(" ",'',names(df.gains2))#remove spaces from column headers
+```
+
+
+
+```{r}
+ggplot(data=df.gains2, aes(x=coefficient, y=Estimate))+
+  geom_hline(yintercept=0, color='grey', linetype='dashed', lwd=1)+
+  geom_errorbar(aes(ymin=Estimate-Std.Error, ymax=Estimate+Std.Error), colour="pink",#SE
+         width=.1, lwd=1)+
+    coord_flip()+
+    geom_point(size=3)+theme_classic(base_size=20)+xlab("")+
+  geom_errorbar(aes(ymin=CI.min, ymax=CI.max), colour="blue", # CIs
+                width=.2,lwd=1) 
+  
+```
+
+
+
+
+
+
